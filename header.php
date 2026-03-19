@@ -29,7 +29,7 @@ function render_header(string $title = 'E-Vax'): void {
     };
   }
 </script>
-  <script charset="utf-8\" src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+  <script charset="utf-8" src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
   
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
