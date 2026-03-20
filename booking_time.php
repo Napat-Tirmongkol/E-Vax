@@ -7,234 +7,140 @@ require_once __DIR__ . '/footer.php';
 
 session_start();
 
-// -----------------------------
-// INPUT: date from booking_date.php
-// -----------------------------
-$year = isset($_GET['year']) ? (int)$_GET['year'] : (int)date('Y');
-$month = isset($_GET['month']) ? (int)$_GET['month'] : (int)date('n');
-$day = isset($_GET['day']) ? (int)$_GET['day'] : (int)date('j');
+$studentId = isset($_SESSION['evax_student_id']) ? (int)$_SESSION['evax_student_id'] : 0;
+if ($studentId <= 0) {
+    header('Location: index.php', true, 303);
+    exit;
+}
 
-if ($year < 2000 || $year > 2100) $year = (int)date('Y');
-if ($month < 1 || $month > 12) $month = (int)date('n');
-if ($day < 1 || $day > 31) $day = (int)date('j');
+$year = (int)($_GET['year'] ?? 0);
+$month = (int)($_Month['month'] ?? $_GET['month'] ?? 0);
+$day = (int)($_GET['day'] ?? 0);
 
-$dateStr = sprintf('%04d-%02d-%02d', $year, $month, $day);
-$dateLabel = date('j F Y', strtotime($dateStr));
+if ($year == 0 || $month == 0 || $day == 0) {
+    header('Location: booking_date.php');
+    exit;
+}
 
-// -----------------------------
-// FETCH TIME SLOTS + REMAINING
-// -----------------------------
-$slots = [];
-$dbError = null;
+$selectedDateStr = sprintf('%04d-%02d-%02d', $year, $month, $day);
+$displayDate = date('j F Y', strtotime($selectedDateStr));
 
-/**
- * ต้องมีตาราง:
- * - vac_time_slots (ts): id, slot_date, start_time, end_time, max_capacity
- * - vac_appointments (ap): id, slot_id, status
- *
- * หมายเหตุ: ถ้าชื่อคอลัมน์คุณไม่ตรง ให้ปรับ SQL ด้านล่าง
- */
+$pdo = db();
 
+// 1. ดึงสล็อตเวลาของวันที่เลือก
+$timeSlots = [];
 try {
-  $pdo = db();
+    $sqlSlots = "
+        SELECT 
+            t.id, t.start_time, t.end_time, t.max_capacity,
+            (SELECT COUNT(*) FROM vac_appointments a WHERE a.slot_id = t.id AND a.status IN ('booked', 'confirmed')) as booked_count
+        FROM vac_time_slots t
+        WHERE t.slot_date = :date
+        ORDER BY t.start_time ASC
+    ";
+    $stmt = $pdo->prepare($sqlSlots);
+    $stmt->execute([':date' => $selectedDateStr]);
+    $timeSlots = $stmt->fetchAll(PDO::FETCH_ASSOC);
+} catch (PDOException $e) {
+    die("Error fetching time slots: " . $e->getMessage());
+}
 
-  $sql = "
-    SELECT
-      ts.id,
-      ts.start_time,
-      ts.end_time,
-      ts.max_capacity,
-      COALESCE(booked.booked_count, 0) AS booked_count,
-      GREATEST(ts.max_capacity - COALESCE(booked.booked_count, 0), 0) AS remaining
-    FROM vac_time_slots ts
-    LEFT JOIN (
-      SELECT ap.slot_id, COUNT(*) AS booked_count
-      FROM vac_appointments ap
-      WHERE (ap.status = 'confirmed' OR ap.status = 'booked')
-      GROUP BY ap.slot_id
-    ) booked ON booked.slot_id = ts.id
-    WHERE ts.slot_date = :slot_date
-    ORDER BY ts.start_time ASC
-  ";
-
-  $stmt = $pdo->prepare($sql);
-  $stmt->execute([':slot_date' => $dateStr]);
-  $slots = $stmt->fetchAll();
-} catch (Throwable $e) {
-  $dbError = $e->getMessage();
-  $slots = [];
+// 2. ดึงวัคซีนที่เปิดให้จอง
+$vaccines = [];
+try {
+    $sqlVac = "
+        SELECT 
+            v.id, v.vaccine_name, v.total_stock,
+            (SELECT COUNT(*) FROM vac_appointments a WHERE a.vaccine_id = v.id AND a.status IN ('booked', 'confirmed')) AS used_stock
+        FROM vac_vaccines v
+        WHERE v.status = 'active'
+    ";
+    $stmtVac = $pdo->query($sqlVac);
+    $vaccines = $stmtVac->fetchAll(PDO::FETCH_ASSOC);
+} catch (PDOException $e) {
+    die("Error fetching vaccines");
 }
 
 render_header('Select Time');
 ?>
 
-<div class="p-5 flex flex-col h-full animate-in fade-in slide-in-from-right-4 duration-500">
-  <div class="flex-1">
-    <div class="text-center mb-6 bg-white p-4 rounded-2xl border border-blue-100 shadow-sm relative overflow-hidden">
-      <div class="absolute top-0 left-0 w-1.5 h-full bg-[#0052CC]"></div>
-      <p class="text-xs font-bold text-gray-500 uppercase tracking-widest mb-1">Selected Date</p>
-      <h2 class="text-xl font-bold text-[#0052CC]"><?= htmlspecialchars($dateLabel, ENT_QUOTES, 'UTF-8') ?></h2>
-    </div>
+<div class="p-5 pb-32 flex flex-col h-full animate-in fade-in slide-in-from-right-4 duration-500">
+    <div class="flex-1">
+        <div class="flex items-center gap-2 mb-5">
+            <div class="w-10 h-10 bg-blue-100 rounded-full flex items-center justify-center">
+                <i class="fa-solid fa-clock text-[#0052CC]"></i>
+            </div>
+            <div>
+                <h2 class="text-xl font-bold text-gray-900">Select Time</h2>
+                <p class="text-xs text-gray-500"><?= $displayDate ?></p>
+            </div>
+        </div>
 
-    <div class="flex items-center gap-2 mb-5">
-      <div class="w-10 h-10 bg-blue-100 rounded-full flex items-center justify-center">
-        <!-- Clock icon -->
-        <svg viewBox="0 0 24 24" class="w-5 h-5 text-[#0052CC]" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <circle cx="12" cy="12" r="10"></circle>
-          <path d="M12 6v6l4 2"></path>
-        </svg>
-      </div>
-      <div>
-        <h2 class="text-xl font-bold text-gray-900">Select Time</h2>
-        <p class="text-xs text-gray-500">Choose an available slot</p>
-      </div>
-    </div>
-
-    <?php if ($dbError !== null): ?>
-      <div class="mb-4 p-3 rounded-xl bg-yellow-50 border border-yellow-200 text-xs text-yellow-800">
-        <div class="font-bold mb-1">Database not ready for time slots</div>
-        <div class="opacity-90">Please create `vac_time_slots` and `vac_appointments` (or adjust column names). No slots can be shown now.</div>
-      </div>
-    <?php endif; ?>
-
-    <form method="post" action="submit_booking.php">
-      <input type="hidden" name="slot_date" value="<?= htmlspecialchars($dateStr, ENT_QUOTES, 'UTF-8') ?>" />
-
-      <div class="space-y-3.5">
-        <?php if (count($slots) === 0): ?>
-          <div class="bg-white rounded-2xl border border-gray-100 shadow-sm p-5 text-sm text-gray-600">
-            No time slots available for this date.
-          </div>
-        <?php else: ?>
-          <?php foreach ($slots as $slot): ?>
-            <?php
-              $slotId = (int)$slot['id'];
-              $start = (string)$slot['start_time'];
-              $end = (string)$slot['end_time'];
-              $remaining = (int)$slot['remaining'];
-              $max = (int)$slot['max_capacity'];
-              $isFull = ($remaining <= 0);
-
-              $timeLabel = substr($start, 0, 5) . ' - ' . substr($end, 0, 5);
-              $cardClasses =
-                "w-full text-left p-5 rounded-2xl border-2 transition-all flex items-center justify-between group " .
-                ($isFull
-                  ? "bg-gray-50 border-gray-100 opacity-60 cursor-not-allowed"
-                  : "bg-white border-transparent shadow-sm hover:border-blue-200 hover:shadow-md");
-
-              $titleClasses = "font-bold text-lg mb-0.5 " . ($isFull ? "text-gray-400" : "text-gray-800");
-
-              $pillClasses =
-                "flex items-center gap-1.5 text-xs font-bold px-3.5 py-1.5 rounded-full border " .
-                ($isFull ? "bg-gray-100 text-gray-500 border-gray-200" : "bg-green-50 text-green-700 border-green-200");
-            ?>
-
-            <label class="<?= htmlspecialchars($cardClasses, ENT_QUOTES, 'UTF-8') ?>">
-              <div>
-                <h3 class="<?= htmlspecialchars($titleClasses, ENT_QUOTES, 'UTF-8') ?>">
-                  <?= htmlspecialchars($timeLabel, ENT_QUOTES, 'UTF-8') ?>
-                </h3>
-                <?php if (!$isFull): ?>
-                  <p class="text-xs text-gray-500 flex items-center gap-1">
-                    <svg viewBox="0 0 24 24" class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                      <circle cx="12" cy="12" r="10"></circle>
-                      <path d="M12 6v6l4 2"></path>
-                    </svg>
-                    Duration: 1 Hour
-                  </p>
-                <?php endif; ?>
-              </div>
-
-              <div class="flex items-center gap-3">
-                <div class="<?= htmlspecialchars($pillClasses, ENT_QUOTES, 'UTF-8') ?>">
-                  <?php if ($isFull): ?>
-                    Fully Booked
-                  <?php else: ?>
-                    <!-- Users icon -->
-                    <svg viewBox="0 0 24 24" class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                      <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
-                      <circle cx="9" cy="7" r="4"></circle>
-                      <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
-                      <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
-                    </svg>
-                    <?= (int)$remaining ?> left
-                  <?php endif; ?>
+        <form action="submit_booking.php" method="POST" id="bookingForm">
+            <input type="hidden" name="booking_date" value="<?= $selectedDateStr ?>">
+            
+            <div class="mb-6 bg-white p-5 rounded-2xl shadow-sm border border-gray-100">
+                <label class="block text-sm font-semibold text-gray-700 mb-2">
+                    <i class="fa-solid fa-syringe text-[#0052CC] mr-1"></i> เลือกวัคซีนที่ต้องการฉีด <span class="text-red-500">*</span>
+                </label>
+                <div class="relative">
+                    <select name="vaccine_id" required class="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-[#0052CC] outline-none font-prompt text-gray-700 bg-gray-50 appearance-none cursor-pointer">
+                        <option value="">-- กรุณาเลือกวัคซีน --</option>
+                        <?php foreach ($vaccines as $v): 
+                            $remaining = $v['total_stock'] - $v['used_stock'];
+                            if ($remaining > 0):
+                        ?>
+                            <option value="<?= $v['id'] ?>"><?= htmlspecialchars($v['vaccine_name']) ?> (ว่าง <?= $remaining ?> โดส)</option>
+                        <?php else: ?>
+                            <option value="" disabled class="text-red-400"><?= htmlspecialchars($v['vaccine_name']) ?> (วัคซีนหมดแล้ว)</option>
+                        <?php endif; ?>
+                        <?php endforeach; ?>
+                    </select>
+                    <div class="pointer-events-none absolute inset-y-0 right-0 flex items-center px-4 text-gray-500">
+                        <i class="fa-solid fa-chevron-down text-sm"></i>
+                    </div>
                 </div>
+            </div>
 
-                <input
-                  type="radio"
-                  name="slot_id"
-                  value="<?= (int)$slotId ?>"
-                  class="w-5 h-5 text-[#0052CC] focus:ring-[#0052CC]"
-                  <?= $isFull ? 'disabled' : '' ?>
-                  required
-                />
-              </div>
-            </label>
-          <?php endforeach; ?>
-        <?php endif; ?>
-      </div>
+            <label class="block text-sm font-semibold text-gray-700 mb-3 ml-1">เลือกรอบเวลา</label>
+            <div class="space-y-3">
+                <?php if (count($timeSlots) === 0): ?>
+                    <div class="bg-gray-50 p-6 rounded-2xl text-center border border-gray-200">
+                        <p class="text-gray-500 font-medium">ไม่พบรอบเวลาที่เปิดรับในวันนี้</p>
+                    </div>
+                <?php else: ?>
+                    <?php foreach ($timeSlots as $slot): 
+                        $timeStr = substr($slot['start_time'], 0, 5) . ' - ' . substr($slot['end_time'], 0, 5);
+                        $remaining = $slot['max_capacity'] - $slot['booked_count'];
+                        $isFull = $remaining <= 0;
+                    ?>
+                        <label class="relative block bg-white border <?= $isFull ? 'border-red-200 opacity-60' : 'border-gray-200 cursor-pointer hover:border-[#0052CC] hover:bg-blue-50/50' ?> rounded-2xl p-4 transition-all">
+                            <div class="flex justify-between items-center">
+                                <div class="flex items-center gap-3">
+                                    <input type="radio" name="slot_id" value="<?= $slot['id'] ?>" <?= $isFull ? 'disabled' : 'required' ?> class="w-5 h-5 text-[#0052CC] focus:ring-[#0052CC] border-gray-300 cursor-pointer disabled:cursor-not-allowed">
+                                    <span class="font-bold text-gray-900 text-lg"><?= $timeStr ?></span>
+                                </div>
+                                <div>
+                                    <?php if ($isFull): ?>
+                                        <span class="text-xs font-bold text-red-500 bg-red-50 px-2 py-1 rounded-md">เต็มแล้ว</span>
+                                    <?php else: ?>
+                                        <span class="text-xs font-bold text-green-600 bg-green-50 px-2 py-1 rounded-md">ว่าง <?= $remaining ?> ที่</span>
+                                    <?php endif; ?>
+                                </div>
+                            </div>
+                        </label>
+                    <?php endforeach; ?>
+                <?php endif; ?>
+            </div>
 
-      <div class="fixed bottom-0 left-0 right-0 max-w-md mx-auto p-4 bg-white border-t border-gray-100 z-20 flex gap-3 shadow-[0_-4px_20px_-10px_rgba(0,0,0,0.1)]">
-        <a
-          href="booking_date.php?year=<?= (int)$year ?>&month=<?= (int)$month ?>&selected_date=<?= (int)$day ?>"
-          class="px-6 py-4 bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold rounded-xl transition-colors active:scale-[0.98] text-center"
-        >
-          Back
-        </a>
-
-        <button
-          type="submit"
-          class="flex-1 flex items-center justify-center gap-2 bg-[#0052CC] hover:bg-blue-700 disabled:bg-gray-300 disabled:text-gray-500 disabled:cursor-not-allowed text-white font-bold py-4 rounded-xl transition-all shadow-sm active:scale-[0.98]"
-          <?= (count($slots) === 0 || $dbError !== null) ? 'disabled' : '' ?>
-        >
-          Confirm Time
-          <svg viewBox="0 0 24 24" class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <path d="M5 12h14"></path>
-            <path d="M12 5l7 7-7 7"></path>
-          </svg>
-        </button>
-      </div>
-    </form>
-  </div>
+            <div class="fixed bottom-0 left-0 right-0 max-w-md mx-auto p-4 bg-white border-t border-gray-100 z-20 flex gap-3 shadow-[0_-4px_20px_-10px_rgba(0,0,0,0.1)]">
+                <a href="booking_date.php?year=<?= $year ?>&month=<?= $month ?>&selected_date=<?= $day ?>" class="px-6 py-4 bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold rounded-xl transition-colors text-center">Back</a>
+                <button type="submit" class="flex-1 bg-[#0052CC] hover:bg-blue-700 text-white font-bold py-4 rounded-xl transition-colors text-center shadow-sm">
+                    ยืนยันการจองคิว
+                </button>
+            </div>
+        </form>
+    </div>
 </div>
 
 <?php render_footer(); ?>
-
-<script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
-
-<script>
-  document.addEventListener('DOMContentLoaded', function() {
-    // หาฟอร์มในหน้าเว็บ (ดักการกด Submit)
-    const bookingForm = document.querySelector('form');
-    
-    if (bookingForm) {
-      bookingForm.addEventListener('submit', function(e) {
-        e.preventDefault(); // หยุดการส่งฟอร์มทันทีเพื่อโชว์ Popup ก่อน
-
-        Swal.fire({
-          title: 'ยืนยันการจองเวลา?',
-          text: 'กรุณาตรวจสอบวันและเวลาให้ถูกต้องก่อนกดยืนยัน',
-          icon: 'question',
-          showCancelButton: true,
-          confirmButtonColor: '#0052CC',
-          cancelButtonColor: '#6B7280', // สีเทาสำหรับปุ่มยกเลิก
-          confirmButtonText: 'ยืนยันการจอง',
-          cancelButtonText: 'ยกเลิก',
-          reverseButtons: true, // สลับให้ปุ่มยืนยันอยู่ด้านขวา (เหมือน iOS)
-          customClass: {
-            title: 'font-prompt',
-            popup: 'font-prompt rounded-2xl',
-            confirmButton: 'font-prompt rounded-xl px-6 py-3',
-            cancelButton: 'font-prompt rounded-xl px-6 py-3'
-          }
-        }).then((result) => {
-          if (result.isConfirmed) {
-            // ถ้ากดยืนยัน ให้ส่งข้อมูลฟอร์มจริงๆ
-            bookingForm.submit(); 
-          }
-        });
-      });
-    }
-  });
-</script>

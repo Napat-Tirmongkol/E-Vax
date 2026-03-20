@@ -29,7 +29,7 @@ render_header('Consent');
 
         <div class="prose prose-sm text-gray-600 mb-6 bg-white p-5 rounded-2xl border border-gray-100 shadow-sm max-h-[50vh] overflow-y-auto font-prompt">
             <h3 class="text-lg font-bold text-gray-900 mb-3">ข้อตกลงและเงื่อนไขการใช้บริการ</h3>
-            <p class="mb-3">ยินดีต้อนรับเข้าสู่ระบบจองคิวรับวัคซีน (E-Vax) กรุณาอ่านและทำความเข้าใจเงื่อนไขด้านล่างนี้ก่อนกดยยอมรับ</p>
+            <p class="mb-3">ยินดีต้อนรับเข้าสู่ระบบจองคิวรับวัคซีน (E-Vax) กรุณาอ่านและทำความเข้าใจเงื่อนไขด้านล่างนี้ก่อนกดยอมรับ</p>
             
             <h4 class="font-bold text-gray-800 mt-4 mb-2">1. ข้อมูลส่วนบุคคลที่เราจัดเก็บ</h4>
             <ul class="list-disc pl-5 mb-3 space-y-1 text-sm">
@@ -64,5 +64,24 @@ render_header('Consent');
         </button>
     </div>
 </div>
+
+<script>
+    document.addEventListener('DOMContentLoaded', () => {
+        // แสดงเนื้อหาหน้า Consent ทันทีเมื่อโหลดหน้าสำเร็จ
+        const content = document.getElementById('consent-content');
+        if (content) {
+            content.style.display = 'flex';
+        }
+
+        // จัดการเปิด/ปิดปุ่มยอมรับตามสถานะ Checkbox
+        const agreeCheckbox = document.getElementById('agreeCheckbox');
+        const continueBtn = document.getElementById('continueBtn');
+        if (agreeCheckbox && continueBtn) {
+            agreeCheckbox.addEventListener('change', (e) => {
+                continueBtn.disabled = !e.target.checked;
+            });
+        }
+    });
+</script>
 
 <?php require_once __DIR__ . '/footer.php'; render_footer(); ?>

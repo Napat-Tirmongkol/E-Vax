@@ -2,115 +2,83 @@
 declare(strict_types=1);
 
 require_once __DIR__ . '/config.php';
-
 session_start();
 
-if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
-  header('Location: booking_date.php', true, 303);
-  exit;
-}
-
-// ต้องมีโปรไฟล์ก่อน (ได้จาก save_profile.php)
 $studentId = isset($_SESSION['evax_student_id']) ? (int)$_SESSION['evax_student_id'] : 0;
 if ($studentId <= 0) {
-  header('Location: profile.php', true, 303);
-  exit;
+    header('Location: index.php', true, 303);
+    exit;
+}
+
+if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+    header('Location: booking_date.php');
+    exit;
 }
 
 $slotId = isset($_POST['slot_id']) ? (int)$_POST['slot_id'] : 0;
-$slotDate = trim((string)($_POST['slot_date'] ?? ''));
+$vaccineId = isset($_POST['vaccine_id']) ? (int)$_POST['vaccine_id'] : 0;
 
-if ($slotId <= 0 || $slotDate === '') {
-  header('Location: booking_date.php', true, 303);
-  exit;
+if ($slotId <= 0 || $vaccineId <= 0) {
+    // ส่งกลับไปหน้าเดิมถ้าข้อมูลไม่ครบ
+    echo "<script>alert('กรุณาเลือกรอบเวลาและประเภทวัคซีนให้ครบถ้วน'); window.history.back();</script>";
+    exit;
 }
-
-// จำกัดรูปแบบวันที่
-if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $slotDate)) {
-  header('Location: booking_date.php', true, 303);
-  exit;
-}
-
-/**
- * สมมติ schema (คุณจะเพิ่ม):
- * - vac_time_slots: id, slot_date, start_time, end_time, max_capacity
- * - vac_appointments: id, slot_id, student_id, status, created_at
- *
- * หมายเหตุ: ถ้าชื่อคอลัมน์/ตารางไม่ตรง ให้แก้ SQL ด้านล่างให้ตรงกับ DB จริง
- */
 
 try {
-  $pdo = db();
-  $pdo->beginTransaction();
+    $pdo = db();
+    
+    // 1. เช็คว่ามีคิวอยู่แล้วหรือเปล่า (กันกดย้ำๆ)
+    $checkSql = "SELECT COUNT(*) FROM vac_appointments WHERE student_id = :sid AND status IN ('confirmed', 'booked')";
+    $stmtCheck = $pdo->prepare($checkSql);
+    $stmtCheck->execute([':sid' => $studentId]);
+    if ((int)$stmtCheck->fetchColumn() > 0) {
+        header('Location: my_bookings.php?error=already_booked', true, 303);
+        exit;
+    }
 
-  // lock slot row เพื่อกัน race condition
-  $lockSql = "
-    SELECT id, slot_date, start_time, end_time, max_capacity
-    FROM vac_time_slots
-    WHERE id = :id AND slot_date = :slot_date
-    FOR UPDATE
-  ";
-  $stmt = $pdo->prepare($lockSql);
-  $stmt->execute([':id' => $slotId, ':slot_date' => $slotDate]);
-  $slot = $stmt->fetch();
+    // 2. เช็คว่า Slot เวลานี้ยังว่างอยู่ไหม
+    $sqlSlot = "
+        SELECT max_capacity, 
+        (SELECT COUNT(*) FROM vac_appointments WHERE slot_id = t.id AND status IN ('booked', 'confirmed')) as booked
+        FROM vac_time_slots t WHERE id = :slot_id
+    ";
+    $stmtSlot = $pdo->prepare($sqlSlot);
+    $stmtSlot->execute([':slot_id' => $slotId]);
+    $slotData = $stmtSlot->fetch(PDO::FETCH_ASSOC);
 
-  if (!$slot) {
-    $pdo->rollBack();
-    header('Location: booking_time.php?day=' . (int)substr($slotDate, 8, 2) . '&month=' . (int)substr($slotDate, 5, 2) . '&year=' . (int)substr($slotDate, 0, 4), true, 303);
+    if (!$slotData || $slotData['booked'] >= $slotData['max_capacity']) {
+        echo "<script>alert('ขออภัย รอบเวลาที่คุณเลือกเต็มแล้ว กรุณาเลือกรอบเวลาอื่น'); window.history.back();</script>";
+        exit;
+    }
+
+    // 3. เช็คว่าวัคซีนที่เลือกยังเหลือสต๊อกอยู่ไหม
+    $sqlVac = "
+        SELECT total_stock, 
+        (SELECT COUNT(*) FROM vac_appointments WHERE vaccine_id = v.id AND status IN ('booked', 'confirmed')) as used
+        FROM vac_vaccines v WHERE id = :vac_id AND status = 'active'
+    ";
+    $stmtVac = $pdo->prepare($sqlVac);
+    $stmtVac->execute([':vac_id' => $vaccineId]);
+    $vacData = $stmtVac->fetch(PDO::FETCH_ASSOC);
+
+    if (!$vacData || $vacData['used'] >= $vacData['total_stock']) {
+        echo "<script>alert('ขออภัย วัคซีนประเภทที่คุณเลือกสต๊อกหมดแล้ว กรุณาเลือกวัคซีนชนิดอื่น'); window.history.back();</script>";
+        exit;
+    }
+
+    // 4. บันทึกข้อมูลการจองลงฐานข้อมูล
+    $insertSql = "INSERT INTO vac_appointments (student_id, slot_id, vaccine_id, status) VALUES (:sid, :slot, :vac, 'booked')";
+    $stmtInsert = $pdo->prepare($insertSql);
+    $stmtInsert->execute([
+        ':sid' => $studentId,
+        ':slot' => $slotId,
+        ':vac' => $vaccineId
+    ]);
+
+    // เสร็จสิ้น เด้งไปหน้าประวัติการจอง
+    header('Location: my_bookings.php?success=1', true, 303);
     exit;
-  }
 
-  $maxCapacity = (int)$slot['max_capacity'];
-
-  // count booked appointments for this slot (lock via same transaction + slot lock)
-  $countSql = "
-    SELECT COUNT(*) AS booked_count
-    FROM vac_appointments
-    WHERE slot_id = :slot_id
-      AND (status = 'confirmed' OR status = 'booked')
-  ";
-  $stmt2 = $pdo->prepare($countSql);
-  $stmt2->execute([':slot_id' => $slotId]);
-  $bookedCount = (int)($stmt2->fetch()['booked_count'] ?? 0);
-
-  if ($bookedCount >= $maxCapacity) {
-    $pdo->rollBack();
-    header('Location: booking_time.php?day=' . (int)substr($slotDate, 8, 2) . '&month=' . (int)substr($slotDate, 5, 2) . '&year=' . (int)substr($slotDate, 0, 4), true, 303);
-    exit;
-  }
-
-  // insert appointment
-  $insertSql = "
-    INSERT INTO vac_appointments (slot_id, student_id, status, created_at)
-    VALUES (:slot_id, :student_id, :status, NOW())
-  ";
-  $stmt3 = $pdo->prepare($insertSql);
-  $stmt3->execute([
-    ':slot_id' => $slotId,
-    ':student_id' => $studentId,
-    ':status' => 'confirmed',
-  ]);
-
-  $appointmentId = (int)$pdo->lastInsertId();
-
-  $pdo->commit();
-
-  // เก็บรายละเอียดสำหรับหน้า success
-  $_SESSION['evax_last_booking'] = [
-    'appointment_id' => $appointmentId,
-    'slot_id' => $slotId,
-    'slot_date' => $slotDate,
-    'start_time' => (string)$slot['start_time'],
-    'end_time' => (string)$slot['end_time'],
-  ];
-
-  header('Location: success.php?id=' . $appointmentId, true, 303);
-  exit;
-} catch (Throwable $e) {
-  if (isset($pdo) && $pdo instanceof PDO && $pdo->inTransaction()) {
-    $pdo->rollBack();
-  }
-  header('Location: booking_date.php', true, 303);
-  exit;
+} catch (PDOException $e) {
+    die("Error Processing Booking: " . $e->getMessage());
 }
-

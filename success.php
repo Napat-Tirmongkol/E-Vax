@@ -110,7 +110,7 @@ render_header('Booking Confirmed');
             <div>
               <p class="text-xs font-bold text-gray-400 uppercase tracking-wider mb-0.5">Location</p>
               <p class="font-bold text-gray-900 text-base leading-tight mt-1">
-                คลินิกเวชกรรม มหาวิทยาลัยรังสิต1<br/>
+                คลินิกเวชกรรม มหาวิทยาลัยรังสิต <br/>
                 <span class="text-gray-500 font-medium text-sm">Building 4/2, Floor 2</span>
               </p>
             </div>
